@@ -25,7 +25,7 @@ def get_features(df):
     new_df['month'] = new_df['date_trunc'].dt.month
     new_df['day'] = new_df['date_trunc'].dt.day
     new_df['day_of_week'] = new_df['date_trunc'].dt.dayofweek
-    new_df['week_of_year'] = new_df['date_trunc'].dt.weekofyear
+    new_df['week_of_year'] = new_df['date_trunc'].dt.isocalendar().week
     new_df['day_of_year'] = new_df['date_trunc'].dt.dayofyear
     new_df['quarter'] = new_df['date_trunc'].dt.quarter
     new_df['is_holiday'] = new_df['date_trunc'].isin(holidays['ds']).astype(int)
