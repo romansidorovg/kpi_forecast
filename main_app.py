@@ -25,10 +25,11 @@ def get_features(df):
     new_df['month'] = new_df['date_trunc'].dt.month
     new_df['day'] = new_df['date_trunc'].dt.day
     new_df['day_of_week'] = new_df['date_trunc'].dt.dayofweek
-    new_df['week_of_year'] = new_df['date_trunc'].dt.isocalendar().week
+    new_df['week_of_year'] = new_df['date_trunc'].dt.weekofyear
     new_df['day_of_year'] = new_df['date_trunc'].dt.dayofyear
     new_df['quarter'] = new_df['date_trunc'].dt.quarter
     new_df['is_holiday'] = new_df['date_trunc'].isin(holidays['ds']).astype(int)
+    new_df['is_weekend'] = new_df['day_of_week'].isin([5,6]).astype(int)
 
     return new_df
 
@@ -38,6 +39,16 @@ if df is not None:
     df.rename(columns={'ds': 'date_trunc'}, inplace=True)
     df['date_trunc'] = pd.to_datetime(df['date_trunc'])
     df = df.sort_values('date_trunc').reset_index(drop=True)
+
+    def check_integer_column(df, column):
+        # Проверяем, является ли колонка числовой
+        if not pd.api.types.is_numeric_dtype(df[column]):
+            return 0  # Если есть строки или нечисловые типы, сразу возвращаем 0
+        
+        # Проверяем, являются ли ВСЕ значения целыми числами
+        return 1 if (df[column] % 1 == 0).all() else 0
+
+    y_dist_type = check_integer_column(df, 'y')
 
     # Список праздников
     holidays = pd.DataFrame({
@@ -147,7 +158,7 @@ if df is not None:
     val = df[(df['date_trunc'] >= last_quarter_end) & (df['date_trunc'] < next_quarter_start)]
 
     # Обучение модели
-    filtered_features = ['year', 'month', 'day', 'day_of_week', 'week_of_year', 'day_of_year', 'quarter', 'is_holiday']
+    filtered_features = ['year', 'month', 'day', 'day_of_week', 'week_of_year', 'day_of_year', 'quarter', 'is_holiday', 'is_weekend']
     target = ['y']
     X = train[filtered_features]
     y = train[target]
@@ -164,8 +175,13 @@ if df is not None:
     val.rename(columns={'y': 'y_fact'}, inplace=True)
     val['diff'] = np.abs(val['y_forecast'] - val['y_fact'])
 
-    fact_metric = val['y_fact'].sum()
-    forecast_metric = int(val['y_forecast'].sum())
+    if y_dist_type == 1:
+        fact_metric = val['y_fact'].sum()
+        forecast_metric = val['y_forecast'].sum()
+    elif y_dist_type == 0:
+        fact_metric = val['y_fact'].mean()
+        forecast_metric = val['y_forecast'].mean()
+
     percentage_diff = np.round((forecast_metric/fact_metric)*100-100, 2)
 
     def get_percentage_diff_type(x):
@@ -215,7 +231,7 @@ if df is not None:
     )
     st.plotly_chart(fig)
 
-    final_message = f'За срок с {last_quarter_end_date} по {next_quarter_start_date}, прогноcтические значение ({forecast_metric}) оказались {percentage_diff_type} на {abs(percentage_diff)}% относительно фактических ({fact_metric}). {percentage_diff_summary[0]}'
+    final_message = f'За срок с {last_quarter_end_date} по {next_quarter_start_date}, прогноcтические значения ({forecast_metric:.2f}) оказались {percentage_diff_type} на {abs(percentage_diff)}% относительно фактических ({fact_metric:.2f}). {percentage_diff_summary[0]}'
     st.markdown(f"<p style='color:{percentage_diff_summary[1]}; font-size:20px; font-weight:bold;'>{final_message}</p>", unsafe_allow_html=True)
 
     # Прогнозирование на будущие даты
@@ -235,8 +251,14 @@ if df is not None:
     future_df['month_date'] = future_df['date_trunc'].dt.to_period('M').dt.to_timestamp()
 
     # Вычисление среднего и стандартного отклонения
-    mean_yhat = future_df['y_forecast'].mean() * val.shape[0]
-    std_yhat = future_df['y_forecast'].std() * val.shape[0]
+    if y_dist_type == 1:
+        mean_yhat = future_df['y_forecast'].mean() * val.shape[0]
+        std_yhat = future_df['y_forecast'].std() * val.shape[0]
+        x_visual = future_df['y_forecast'] * future_df.shape[0]
+    elif y_dist_type == 0:
+        mean_yhat = future_df['y_forecast'].mean()
+        std_yhat = future_df['y_forecast'].std()
+        x_visual = future_df['y_forecast']
 
     sigma_1_positive = mean_yhat + std_yhat
     sigma_1_negative = mean_yhat - std_yhat
@@ -246,21 +268,6 @@ if df is not None:
 
     sigma_3_positive = mean_yhat + 3 * std_yhat
     sigma_3_negative = mean_yhat - 3 * std_yhat
-
-    # Визуализация гистограммы с сигмами
-    fig_hist = go.Figure()
-    fig_hist.add_trace(go.Histogram(x=future_df['y_forecast'] * future_df.shape[0], nbinsx=10, name='Распределение y_forecast'))
-    fig_hist.add_vline(x=mean_yhat, line_dash="dash", line_color="red", annotation_text=f"Среднее: {mean_yhat:.2f}")
-    #fig_hist.update_layout(title="Гистограмма распределения прогностических значений", xaxis_title="y_forecast", yaxis_title="Частота")
-    fig_hist.update_layout(
-        title="Гистограмма распределения прогностических значений", 
-        title_font=dict(size=14, color='gray'),  # Размер и цвет заголовка
-        xaxis_title="y_forecast",
-        xaxis_title_font=dict(size=12, color='gray'),  # Размер и цвет подписи оси X
-        yaxis_title="Частота",
-        yaxis_title_font=dict(size=12, color='gray'),  # Размер и цвет подписи оси Y
-    )
-    st.plotly_chart(fig_hist)
 
     st.caption(f"Среднее значение: {mean_yhat:.2f}")
     st.caption(f"Стандартное отклонение: {std_yhat:.2f}")
@@ -315,10 +322,16 @@ if df is not None:
 
     positive_diff = sigma_1_positive/mean_yhat
     negative_diff = (sigma_1_negative/mean_yhat)
-    forecast_grouped_df = future_df.groupby(['month_date'], as_index=False).agg(key_metric=('y', 'sum'))
-    forecast_grouped_df["Пессимистичный сценарий"] = (forecast_grouped_df['key_metric'] * negative_diff).astype(int)
-    forecast_grouped_df["Оптимистичный сценарий"] = (forecast_grouped_df['key_metric'] * positive_diff).astype(int)
-    forecast_grouped_df['key_metric'] = (forecast_grouped_df['key_metric']).astype(int)
+    if y_dist_type == 1:
+        forecast_grouped_df = future_df.groupby(['month_date'], as_index=False).agg(key_metric=('y', 'sum'))
+        forecast_grouped_df["Пессимистичный сценарий"] = (forecast_grouped_df['key_metric'] * negative_diff).astype(int)
+        forecast_grouped_df["Оптимистичный сценарий"] = (forecast_grouped_df['key_metric'] * positive_diff).astype(int)
+        forecast_grouped_df['key_metric'] = (forecast_grouped_df['key_metric']).astype(int)
+    elif y_dist_type == 0:
+        forecast_grouped_df = future_df.groupby(['month_date'], as_index=False).agg(key_metric=('y', 'mean'))
+        forecast_grouped_df["Пессимистичный сценарий"] = np.round(forecast_grouped_df['key_metric'] * negative_diff, 2)
+        forecast_grouped_df["Оптимистичный сценарий"] = np.round(forecast_grouped_df['key_metric'] * positive_diff, 2)
+        forecast_grouped_df['key_metric'] = np.round(forecast_grouped_df['key_metric'], 2)
 
     # Преобразуем в нужный формат: 'Январь, 2025'
     forecast_grouped_df['month_date'] = forecast_grouped_df['month_date'].dt.strftime('%B, %Y')
@@ -335,4 +348,5 @@ if df is not None:
 
     forecast_grouped_df = forecast_grouped_df[['Месяц', 'Пессимистичный сценарий', 'Реалистичный сценарий', 'Оптимистичный сценарий']]
     
+    st.markdown(f"### Распределение по месяцам")
     st.dataframe(forecast_grouped_df)
